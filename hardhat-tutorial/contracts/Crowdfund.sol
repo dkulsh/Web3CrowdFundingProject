@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-
 pragma solidity >=0.7.0 <0.9.0;
-
 import "./Batch4Team1Coin.sol";
 import "./Batch4Team1Receipt.sol";
 import "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
@@ -15,12 +13,9 @@ import "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
 contract Crowdfund is ERC1155Holder {
     Batch4Team1Coin b4t1Coin;
     Batch4Team1Receipt b4t1Receipt;
-
     // @notice Minimum amount of ETH required to allow the contract to function.
     uint constant MINIMUM_AMOUNT = 10_000;
-
     uint campaignId = 0;
-
     struct Campaign {
         uint _id;
         string _name;
@@ -34,12 +29,10 @@ contract Crowdfund is ERC1155Holder {
         bool _ended;
         address[] _contributors;
     }
-
     // @notice Nested mapping to maintain all contributions to the campaigns.
     // @dev Campaign index mapped to the list of contributor's addresses.
     // @dev Each contributor address mapped to the contribution
     mapping(uint => mapping(address => uint)) public _contributionDetails;
-
     Campaign[] public campaigns;
 
     constructor(address b4t1CoinAddress, address b4t1ReceiptAddress) {
@@ -53,7 +46,6 @@ contract Crowdfund is ERC1155Holder {
             campaigns[campaignIdLocal]._projectOwner == sender,
             "Only campaignOwner can trigger this functionality."
         );
-
         _;
     }
 
@@ -79,11 +71,9 @@ contract Crowdfund is ERC1155Holder {
         _c._projectOwner = msg.sender;
         _c._target = target;
         _c._presaleEndTime = endTime;
-        _c._withdrawPledgeTime = block.timestamp + 2 minutes;
+        _c._withdrawPledgeTime = (block.timestamp + 2 minutes) * 1000;
         _c._ended = false;
-
         campaigns.push(_c);
-
         return campaignId - 1;
     }
 
@@ -98,17 +88,16 @@ contract Crowdfund is ERC1155Holder {
         if (campaigns[campaignIdLocal]._ended == true) {
             return "ended";
         }
-
         // Time ended + Met contribution ?
         if (
-            campaigns[campaignIdLocal]._presaleEndTime < block.timestamp &&
+            campaigns[campaignIdLocal]._presaleEndTime <
+            block.timestamp * 1000 &&
             campaigns[campaignIdLocal]._collection <
             campaigns[campaignIdLocal]._target
         ) {
             endCampaign(campaignIdLocal);
             return "ended";
         }
-
         return "active";
     }
 
@@ -123,9 +112,7 @@ contract Crowdfund is ERC1155Holder {
             campaigns[campaignIdLocal]._ended == false,
             "Campaign already ended."
         );
-
         campaigns[campaignIdLocal]._ended = true;
-
         // For this campaign, loop over the contributors
         for (
             uint8 i = 0;
@@ -139,7 +126,6 @@ contract Crowdfund is ERC1155Holder {
             ) {
                 continue;
             }
-
             // Return the tokens back to the contributor.
             b4t1Coin.transfer(
                 campaigns[campaignIdLocal]._contributors[i],
@@ -175,7 +161,6 @@ contract Crowdfund is ERC1155Holder {
     function contributeTokens(uint chosenCampaign, uint amount) external {
         require(amount > 0, "Must input tokens to deposit");
         require(msg.sender != address(0), "Invalid wallet address");
-
         require(
             campaigns[chosenCampaign]._collection <
                 campaigns[chosenCampaign]._target,
@@ -187,28 +172,24 @@ contract Crowdfund is ERC1155Holder {
             "Target amount exceeded. Reduce amount to contribute."
         );
         require(
-            block.timestamp < campaigns[chosenCampaign]._presaleEndTime,
+            block.timestamp * 1000 < campaigns[chosenCampaign]._presaleEndTime,
             "Contributions allowed only before deadline"
         );
         require(
             campaigns[chosenCampaign]._ended == false,
             "Campaign must be active"
         );
-
         require(
             b4t1Coin.allowance(msg.sender, address(this)) >= amount,
             "Approve token transfer to contract"
         );
         require(gasleft() > MINIMUM_AMOUNT, "Insufficient gas balance");
-
         // Receive tokens
         b4t1Coin.transferFrom(msg.sender, address(this), amount);
-
         // Collect details of contributor/ contribution
         campaigns[chosenCampaign]._contributors.push(msg.sender);
         _contributionDetails[chosenCampaign][msg.sender] += amount;
         campaigns[chosenCampaign]._collection += amount;
-
         // Return receipt
         b4t1Receipt.mint(msg.sender, chosenCampaign, amount, "");
     }
@@ -219,10 +200,14 @@ contract Crowdfund is ERC1155Holder {
     // @param campaignId The index of the campaign. Returned by createCampaign method
     function withdrawPledge(uint chosenCampaign) external {
         require(
-            block.timestamp < campaigns[chosenCampaign]._withdrawPledgeTime,
-            "Pledged tokens cannot be withdrawn after 2 mins"
+            block.timestamp * 1000 > campaigns[chosenCampaign]._presaleEndTime,
+            "Withdraw can be claimed after campaign has completed"
         );
-
+        require(
+            campaigns[chosenCampaign]._collection <
+                campaigns[chosenCampaign]._target,
+            "Campaign was success, can't withdraw"
+        );
         b4t1Receipt.safeTransferFrom(
             msg.sender,
             address(this),
@@ -234,11 +219,11 @@ contract Crowdfund is ERC1155Holder {
             msg.sender,
             _contributionDetails[chosenCampaign][msg.sender]
         );
-
         _contributionDetails[chosenCampaign][msg.sender] = 0;
         campaigns[chosenCampaign]._collection -= _contributionDetails[
             chosenCampaign
         ][msg.sender];
+        campaigns[chosenCampaign]._ended = true;
     }
 
     // @notice User claims reward of his contribution
@@ -249,17 +234,20 @@ contract Crowdfund is ERC1155Holder {
     function claimReward(uint chosenCampaign, uint amount) external {
         require(amount > 0, "Not a valid amount for withdrawal");
         require(msg.sender != address(0), "Invalid wallet address");
-
         require(
-            block.timestamp > campaigns[chosenCampaign]._presaleEndTime,
+            block.timestamp * 1000 > campaigns[chosenCampaign]._presaleEndTime,
             "Reward can be claimed after campaign has completed"
         );
         require(
             _contributionDetails[chosenCampaign][msg.sender] >= amount,
             "Amount claimed is more than amount deposited"
         );
+        require(
+            campaigns[chosenCampaign]._collection >=
+                campaigns[chosenCampaign]._target,
+            "Campaign failed, can't claim reward"
+        );
         require(gasleft() > MINIMUM_AMOUNT, "Insufficient gas balance");
-
         b4t1Receipt.safeTransferFrom(
             msg.sender,
             address(this),
@@ -267,8 +255,7 @@ contract Crowdfund is ERC1155Holder {
             amount,
             "x0"
         );
-        b4t1Coin.transfer(msg.sender, amount);
-
+        b4t1Coin.transfer(msg.sender, amount + amount / 10);
         _contributionDetails[chosenCampaign][msg.sender] -= amount;
     }
 
